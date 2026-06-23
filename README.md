@@ -1,139 +1,330 @@
+<div align="center">
+
 # VizFlow
 
-自然语言生成可视化工作流与节点编排 — MVP 演示版
+**Turn natural language into working visualizations, end-to-end.**
 
-## 快速开始
+*自然语言 → 可视化图表 + AI 洞察分析，三节点智能体工作流。*
 
-### 前置要求
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
+[![React](https://img.shields.io/badge/react-18-61dafb.svg)](https://react.dev)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688.svg)](https://fastapi.tiangolo.com)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Model: DeepSeek-V4](https://img.shields.io/badge/DeepSeek--V4-flash-blueviolet)](https://api-docs.deepseek.com)
 
-- Python 3.11+
-- Node.js 18+
-- npm 或 yarn
+A node-based workbench where a sentence becomes a chart, and a chart becomes a written insight.
+Built on **DeepSeek-V4-Flash** for chart-spec synthesis and analysis, **FastAPI** for the
+backend, **React Flow** for the canvas, and **Vega-Lite** as the chart description language.
 
-### 启动（Windows PowerShell）
+</div>
 
-在项目根目录运行：
+---
 
-```powershell
-.\scripts\dev.ps1
+## ✨ What it does
+
+```
+┌──────────┐  prompt  ┌──────────┐  spec  ┌────────────┐
+│ Dataset  │ ───────► │  Chart   │ ─────► │  Analysis  │
+│  node    │          │  node    │       │    node    │
+└──────────┘          └──────────┘       └────────────┘
+   ↑ CSV/JSON           Vega-Lite           Markdown
+                         JSON spec            insight
 ```
 
-这会同时启动：
-- 后端 FastAPI: http://localhost:8000
-- 前端 Vite React: http://localhost:3000
-- API 文档: http://localhost:8000/docs
+| Step | What happens | Output |
+|---|---|---|
+| **1. Upload** | Drag a CSV / JSON / XLSX onto the canvas. Schema is inferred and persisted. | A green **Dataset** node |
+| **2. Generate** | Type something like *"bar chart of sales by month, descending"*. The 6-step structured-reasoning prompt turns it into a Vega-Lite v5 spec. | A blue **Chart** node with a live, rendered visualization |
+| **3. Analyze** | Click **💡 AI 分析**. The model receives the spec + computed statistics (min/max/mean/distribution) and returns structured Markdown. | An orange **Analysis** node with a 4-section insight |
 
-### 手动启动
+Everything is persisted. Reload the page, share the URL, the workflow comes back.
 
-#### 后端
+---
 
-```powershell
+## 🚀 Quick start
+
+### Prerequisites
+
+- **Python 3.11+**
+- **Node.js 18+** and **npm**
+- A **DeepSeek API key** ([get one here](https://platform.deepseek.com))
+
+### 1. Clone & configure
+
+```bash
+git clone https://github.com/techdou/vizflow.git
+cd vizflow
+```
+
+Create `backend/.env` (this file is gitignored — **never commit it**):
+
+```env
+DEEPSEEK_API_KEY=sk-your-key-here
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-v4-flash
+
+# Optional: enable X-API-Key auth on /api/charts and /api/analysis
+# VIZFLOW_API_KEY=some-long-random-string
+
+# Optional: cap concurrent in-flight LLM calls (default 3)
+# MAX_CONCURRENT_LLM=3
+```
+
+### 2. Start the backend
+
+```bash
 cd backend
 pip install -r requirements.txt
-$env:PYTHONPATH="$PWD"
-python -m uvicorn src.main:app --reload --port 8000
+PYTHONPATH=. uvicorn src.main:app --reload --port 8001
 ```
 
-#### 前端
+> **Note:** The port 8000/8001 distinction is intentional — port 8000 is often
+> claimed by Hyper-V on Windows. Change `--port` if 8001 is also taken.
 
-```powershell
+API docs are at <http://localhost:8001/docs>.
+
+### 3. Start the frontend
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-## 项目结构
+Open <http://localhost:3000>.
+
+### 4. Try it
+
+1. Click **📤 上传数据**, pick a CSV (try `backend/sales_test.csv`).
+2. Type a prompt, e.g. *"按月份展示销售趋势并标注最高月份"*.
+3. Click **📊 生成图表** — wait a few seconds, a chart appears.
+4. Click **💡 AI 分析** — the model writes a structured insight below the chart.
+
+---
+
+## 🏗️ Architecture
 
 ```
-.
-├── backend/              # Python FastAPI 后端
+┌─────────────────────────────────────────────────────────────────────┐
+│ Browser (React + React Flow + Vega-Embed)                           │
+│   · node-based canvas with dagre auto-layout                        │
+│   · chart nodes render the live Vega-Lite spec via vega-embed       │
+│   · analysis nodes render Markdown via react-markdown                │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ /api/* (REST + X-API-Key)
+┌────────────────────▼────────────────────────────────────────────────┐
+│ FastAPI backend                                                      │
+│   · X-API-Key auth dependency (disabled if VIZFLOW_API_KEY unset)   │
+│   · asyncio.Semaphore caps in-flight LLM calls (default 3)           │
+│   · streams uploads, dedups by SHA-256, infers schema at upload      │
+│   · chart cache keyed by (dataset_hash + prompt + policy + model)    │
+│   · SQLite with WAL; background thumbnail tasks share the engine     │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ OpenAI-compatible Chat Completions
+┌────────────────────▼────────────────────────────────────────────────┐
+│ DeepSeek-V4-Flash (MoE 284B / 13B active, 1M context)               │
+│   · chart generation: 6-step structured-reasoning prompt              │
+│   · analysis: spec + computed stats (min/max/mean/distribution)     │
+│   · JSON extraction is raw_decode-based → braces in strings survive  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+A printable architecture diagram is in `report/assets/fig_architecture.png`.
+
+---
+
+## 🧠 How chart generation works
+
+The single most important design choice is the **6-step structured-reasoning prompt**.
+Without it, the model happily returns a bar chart for "show trend" requests.
+
+| Step | What the model is asked to do |
+|---|---|
+| 1. Select columns | Identify which fields from the table are needed |
+| 2. Filter data | Top N, value range, category filter, etc. |
+| 3. Aggregate | count / sum / mean / min / max |
+| 4. Choose chart type | bar (compare) / line (trend) / arc (proportion) / ... |
+| 5. Select encodings | x / y / color / size + field types + sort |
+| 6. Sort | sort field and direction |
+
+The model emits reasoning text **then** a `\`\`\`json` block. The backend
+uses `json.JSONDecoder.raw_decode` to robustly extract the spec (even when
+the reasoning contains braces), and injects the full dataset (capped at 500 rows
+via deterministic stride sampling for big tables).
+
+This is inspired by **Chain-of-Thought** (Wei et al., 2022) and **ReAct**
+(Yao et al., 2023); see the `参考文献` section below.
+
+---
+
+## 📊 Case studies (also in `report/`)
+
+| Case | Dataset | Prompt | Generated |
+|---|---|---|---|
+| 1 | sales_test.csv (12 rows) | 按月份展示销售趋势并标注最高月份 | Layered chart: line + rule + text annotation. Model correctly identifies **Dec = 350**. |
+| 2 | sample_data.csv (20 rows) | 各类别销售额 Top5，降序 | Bar with aggregate=sum + window/filter for top-N. Electronics leads. |
+| 3 | energy_production.csv (12 rows) | 各类能源总量占比，饼图 | Arc chart with `fold` transform. Coal dominates. |
+
+---
+
+## 🧪 Engineering highlights
+
+This isn't just a weekend script — the codebase has been hardened against a
+number of concrete failure modes:
+
+- **No more data pollution between concurrent requests.** The LLM provider
+  singleton no longer stores per-request state on `self`; everything is local.
+  Previously, request B could overwrite request A's dataset mid-flight.
+- **Cache key includes dataset content hash.** A re-uploaded file with the
+  same name and prompt correctly invalidates the old chart instead of
+  serving stale data.
+- **`cache_key` is no longer a unique DB constraint.** Regenerating the same
+  chart no longer triggers an `IntegrityError` on the second insert.
+- **SQLite WAL + connection pool.** Background thumbnail tasks reuse the
+  shared `SessionLocal` instead of opening a new engine per request.
+- **Robust JSON extraction.** `JSONDecoder.raw_decode` walks every `{`
+  position and asks the decoder how far the object extends — correctly
+  handling strings that contain braces.
+- **Cap on embedded rows.** Specs bigger than 500 rows are sampled
+  deterministically, keeping both the spec and downstream analysis tractable.
+- **`AbortController` on the frontend.** Starting a new chart cancels any
+  in-flight LLM call from the previous click — no more stale responses
+  overwriting fresh state.
+- **`generation_runs` audit table.** Every LLM call (chart + analysis) is
+  recorded with input, output, status, and latency in milliseconds.
+- **Aborts and dirty-flag auto-save.** Auto-save only runs when there are
+  pending changes; the 30-second loop is gated by a `dirtyRef`.
+
+---
+
+## 🗂️ Project structure
+
+```
+visflow/
+├── backend/                  # FastAPI service
 │   ├── src/
-│   │   ├── api/         # API 路由 (datasets, charts, analysis, workflows)
-│   │   ├── models/      # SQLAlchemy 数据模型
-│   │   ├── services/    # LLM provider, thumbnails, validation
-│   │   ├── schemas/     # Pydantic schemas
-│   │   ├── storage/     # 文件存储适配器
-│   │   ├── core/        # 配置、数据库、日志
-│   │   └── main.py      # FastAPI 入口
-│   └── requirements.txt
-├── frontend/            # React + React Flow 前端
+│   │   ├── api/              # datasets / charts / analysis / workflows
+│   │   ├── core/             # config, database, logging, deps (auth+semaphore)
+│   │   ├── models/           # SQLAlchemy ORM
+│   │   ├── schemas/          # Pydantic request/response shapes
+│   │   ├── services/         # LLM provider, thumbnails, dataset parsing
+│   │   ├── storage/          # file storage
+│   │   └── main.py           # FastAPI entry
+│   ├── tests/                # pytest + smoke tests
+│   ├── docs/                 # design notes
+│   ├── requirements.txt
+│   └── .env                  # NOT in git
+│
+├── frontend/                 # React + Vite + React Flow
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── nodes/   # DatasetNode, ChartNode, AnalysisNode
-│   │   │   └── editors/ # 可视/JSON 双编辑器 (TODO)
-│   │   ├── pages/       # FlowCanvas 主画布
-│   │   ├── services/    # API 客户端
-│   │   └── main.tsx
-│   └── package.json
-├── data/                # 运行时数据
-│   ├── datasets/        # 上传的数据集
-│   ├── thumbnails/      # 图表缩略图
-│   └── db.sqlite3       # SQLite 数据库
-└── specs/               # 规格与计划文档
-    └── 001-number-1-shortname/
-        ├── spec.md
-        ├── plan.md
-        ├── tasks.md
-        ├── research.md
-        ├── data-model.md
-        └── contracts/openapi.yaml
+│   │   │   ├── nodes/        # DatasetNode / ChartNode / AnalysisNode
+│   │   │   └── editors/      # Visual + JSON chart editors
+│   │   ├── pages/            # FlowCanvas (main view)
+│   │   └── services/         # API client with AbortController
+│   ├── public/               # static assets (report-only, gitignored)
+│   ├── package.json
+│   └── vite.config.ts
+│
+├── .gitignore                # excludes .env, node_modules, db.sqlite3, …
+├── .env                       # NOT in git
+└── README.md
 ```
 
-## 当前功能（MVP Phase 3 完成 ✅）
+---
 
-- ✅ 上传数据集 (CSV/JSON) → 后端存储与去重
-- ✅ **真实 LLM 集成** → DeepSeek API 生成 Vega-Lite spec
-- ✅ 前端画布：React Flow + 节点/连线自动编排
-- ✅ 节点组件：DatasetNode, ChartNode (带缩略图预览)
-- ✅ 缓存与幂等 (hash-based)
-- ⏳ 缩略图渲染（需安装 vl-convert-python）
-- ⏳ 多模态分析（GLM-4.5v，Phase 4）
-- ⏳ 图表可视/JSON 双编辑器（User Story 2）
-- ⏳ 保存/导出与复现（User Story 3）
+## ⚙️ Configuration reference
 
-## 配置
+`backend/.env` (all optional except `DEEPSEEK_API_KEY`):
 
-创建 `backend/.env` 文件（可选）：
+| Key | Default | Notes |
+|---|---|---|
+| `DEEPSEEK_API_KEY` | — | **Required.** Get one at <https://platform.deepseek.com>. |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | OpenAI-compatible endpoint |
+| `DEEPSEEK_MODEL` | `deepseek-v4-flash` | Try `deepseek-v4-pro` for higher quality (slower, thinking mode on) |
+| `VIZFLOW_API_KEY` | *(empty)* | If set, `/api/charts` and `/api/analysis` require `X-API-Key` header. **Never deploy publicly with this empty.** |
+| `MAX_CONCURRENT_LLM` | `3` | Global asyncio.Semaphore on LLM calls |
+| `DEMO_MODE` | `true` | Verbose error messages in responses |
+| `CORS_ORIGINS` | `localhost:3000,127.0.0.1:3000` | Comma-separated |
+| `MAX_UPLOAD_SIZE` | 25 MB | Streamed in 1 MB chunks |
+| `MAX_ROWS` | 200000 | Datasets beyond this are rejected |
+| `ANALYSIS_PROVIDER` | `text` | `text` = DeepSeek; `vision` = GLM-4.5v (requires `GLM_API_KEY`) |
 
-```env
-DEMO_MODE=true
-DB_URL=sqlite:///./data/db.sqlite3
-DATASETS_DIR=./data/datasets
-THUMBNAILS_DIR=./data/thumbnails
+Frontend reads `localStorage.vizflow_api_key` (if set) and sends it as
+`X-API-Key`. The default Vite dev proxy points at `http://localhost:8001`.
 
-# LLM (optional)
-DEEPSEEK_API_KEY=your_key_here
-DEEPSEEK_MODEL=deepseek-chat
+---
 
-# Multimodal (optional)
-GLM_API_KEY=your_key_here
-GLM_MODEL=glm-4v
+## 🛠️ Development
+
+```bash
+# Backend
+cd backend
+pip install -r requirements.txt
+PYTHONPATH=. uvicorn src.main:app --reload --port 8001
+
+# Frontend
+cd frontend
+npm install
+npm run dev
 ```
 
-## 演示流程
+Useful endpoints:
 
-1. 打开 http://localhost:3000
-2. 点击"📤 上传数据"，选择 CSV 或 JSON 文件
-3. （可选）输入自然语言 prompt，如"按月份汇总销售额并展示 Top5"
-4. 点击"📊 生成图表"
-5. 观察画布上出现 Dataset 节点与 Chart 节点，以及连线
-6. 点击"🔄 自动布局"优化排版
+| URL | What it is |
+|---|---|
+| <http://localhost:3000> | The app |
+| <http://localhost:8001/docs> | Swagger UI for the API |
+| <http://localhost:8001/health> | Liveness check |
+| <http://localhost:8001/redoc> | ReDoc API reference |
 
-## 开发进度
+### Running tests
 
-参见 `specs/001-number-1-shortname/tasks.md` 了解详细任务列表与依赖。
+```bash
+cd backend
+PYTHONPATH=. python -m pytest tests/ -v          # unit tests
+PYTHONPATH=. python smoke_test.py                # smoke
+PYTHONPATH=. python test_deepseek_llm.py         # live LLM test (needs key)
+```
 
-当前阶段：**Phase 3 - User Story 1 (P1 MVP)** 部分完成
+---
 
-## 文档
+## 🚢 Deployment notes
 
-- [功能规格](specs/001-number-1-shortname/spec.md)
-- [实现计划](specs/001-number-1-shortname/plan.md)
-- [任务分解](specs/001-number-1-shortname/tasks.md)
-- [技术决策](specs/001-number-1-shortname/research.md)
-- [数据模型](specs/001-number-1-shortname/data-model.md)
-- [API 契约](specs/001-number-1-shortname/contracts/openapi.yaml)
+- The default SQLite setup is fine for one-machine demos but won't scale beyond
+  one process. For multi-worker production, switch `DB_URL` to PostgreSQL.
+- If you set `VIZFLOW_API_KEY`, also set the same value in the frontend's
+  `localStorage.vizflow_api_key` (or extend the API client to read it from
+  another source).
+- CORS is locked to `localhost:3000` by default; override `CORS_ORIGINS` for
+  your deployment host.
+- The thumbnail renderer (`vl-convert-python`) is optional; if missing, the
+  frontend renders charts via vega-embed and analysis works regardless.
 
-## License
+---
 
-MIT
+## 🤝 Contributing
+
+Issues and PRs welcome. The honest constraints:
+
+- **Hallucination is real.** Always have a human check numerical claims. The
+  `generation_runs` table is your audit trail.
+- **V4 is preview.** Latency is higher than the old `deepseek-chat` (~15-30s
+  per chart) because of the 1M-context MoE architecture. Reduce `max_tokens`
+  or disable thinking mode for latency-sensitive deployments.
+- **The frontend is desktop-first.** Mobile canvas UX is not a target.
+
+## 📄 License
+
+[MIT](LICENSE) — see the file. You are free to use, modify, and distribute,
+provided the copyright notice is preserved.
+
+## 🙏 Acknowledgments
+
+- [Vega-Lite](https://vega.github.io/vega-lite/) and the [Grammar of
+  Graphics](https://www.cs.uic.edu/~wilkinson/TheGrammarOfGraphics/TheGrammarOfGraphics.pdf)
+  for the declarative visualization model.
+- [DeepSeek](https://api-docs.deepseek.com) for the V4-Flash API that makes
+  this work.
+- React Flow for the node-based canvas.
+- The report in `report/` (一份中文项目实践报告) for the academic writeup.
